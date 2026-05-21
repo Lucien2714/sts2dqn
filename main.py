@@ -5,6 +5,7 @@ from game import Game
 from ai_agent import Agent
 
 SAVE_INTERVAL = 10
+TRAINING_BACKUP_INTERVAL = 5000
 CHECKPOINT_DIR = Path("checkpoints")
 BATTLE_MODEL_PATH = CHECKPOINT_DIR / "battle_agent_latest.pt"
 COMBAT_SCREEN_TYPES = {"monster", "elite", "boss"}
@@ -18,6 +19,21 @@ def should_skip_agent(raw_state: dict) -> bool:
     return not (
         battle.get("turn") == "player"
         and battle.get("is_play_phase") is True
+    )
+
+
+def battle_backup_path(trained_steps: int) -> Path:
+    return CHECKPOINT_DIR / f"battle_agent_step_{trained_steps}.pt"
+
+
+def save_battle_checkpoint(agent: Agent, path: Path, reason: str) -> None:
+    agent.battle_agent.save(str(path))
+    logging.info(
+        "Saved battle agent checkpoint (%s) to %s trained_steps=%d learn_steps=%d",
+        reason,
+        path,
+        agent.battle_agent.trained_steps,
+        agent.battle_agent.learn_steps,
     )
 
 
@@ -46,6 +62,7 @@ def main():
     else:
         logging.info("No battle agent checkpoint found at %s; starting fresh", BATTLE_MODEL_PATH)
 
+    last_backup_index = agent.battle_agent.trained_steps // TRAINING_BACKUP_INTERVAL
     episode = 1
 
     while True:
@@ -151,6 +168,28 @@ def main():
                     update_count += 1
                     losses.append(loss)
 
+                backup_index = agent.battle_agent.trained_steps // TRAINING_BACKUP_INTERVAL
+                if backup_index > last_backup_index:
+                    last_backup_index = backup_index
+                    backup_step = backup_index * TRAINING_BACKUP_INTERVAL
+                    try:
+                        save_battle_checkpoint(
+                            agent,
+                            BATTLE_MODEL_PATH,
+                            f"training milestone {backup_step}",
+                        )
+                        save_battle_checkpoint(
+                            agent,
+                            battle_backup_path(backup_step),
+                            f"training milestone backup {backup_step}",
+                        )
+                    except Exception as exc:
+                        logging.exception(
+                            "Could not save battle agent milestone checkpoint at trained_steps=%d: %s",
+                            agent.battle_agent.trained_steps,
+                            exc,
+                        )
+
             print(
                 action,
                 "reward=", reward,
@@ -205,11 +244,10 @@ def main():
         )
         if episode % SAVE_INTERVAL == 0:
             try:
-                agent.battle_agent.save(str(BATTLE_MODEL_PATH))
-                logging.info(
-                    "Saved battle agent model after episode %d to %s",
-                    episode,
+                save_battle_checkpoint(
+                    agent,
                     BATTLE_MODEL_PATH,
+                    f"episode {episode}",
                 )
             except Exception as exc:
                 logging.exception(
