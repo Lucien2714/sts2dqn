@@ -66,9 +66,8 @@ def main():
     episode = 1
 
     while True:
-        state = game.reset()
+        raw_state = game.reset()
         done = False
-        raw_state = game.client.get_state()
         episode_reward = 0.0
         battle_reward = 0.0
         current_battle_reward = 0.0
@@ -89,7 +88,6 @@ def main():
         logging.info("Starting episode %d", episode)
 
         while raw_state.get("state_type")!="game_over":
-            raw_state = game.client.get_state()
             prev_raw_state = raw_state
             encoded_state = game._encode_state(raw_state)
 
@@ -102,8 +100,8 @@ def main():
                 }
                 action = agent.choose_action(policy_state)
                 
-            next_state, reward, done, info = game.step(action)
-            next_raw_state = info.get("raw_state", game.client.get_state())
+            next_state, reward, done, info = game.step(action, prev_raw_state)
+            next_raw_state = info.get("raw_state")
             reward_details = info.get("reward_details", {})
             training_info = agent.train_from_step(
                 prev_raw_state,
@@ -202,6 +200,7 @@ def main():
             if done:
                 break
 
+            raw_state = next_raw_state
             time.sleep(0.3)
 
         avg_loss = sum(losses) / len(losses) if losses else None
