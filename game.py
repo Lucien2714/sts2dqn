@@ -26,7 +26,7 @@ class Game:
         character: int=0,
         seed: t.Optional[int] = None,
         base_url: str = "http://localhost:15526/api/v1",
-        timeout: float = 60.0,
+        timeout: float = 20.0,
     ):
         self.character = character
         random.seed(seed)
