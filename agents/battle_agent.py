@@ -103,7 +103,7 @@ class BattleDQNAgent:
     gamma=0.99,
     epsilon=1.0,
     learning_rate=0.0005,
-    epsilon_decay=0.9995,
+    epsilon_decay=0.99995,
     epsilon_min=0.01,
     batch_size=32,
     memory_size=100000,
@@ -146,6 +146,7 @@ class BattleDQNAgent:
     self.epsilon_min = epsilon_min
     self.batch_size = batch_size
     self.replay_buffer = deque(maxlen=memory_size)
+    self.trained_steps = 0
     self.learn_steps = 0
 
     self.device = self._resolve_device(device)
@@ -206,6 +207,7 @@ class BattleDQNAgent:
       bool(done),
       list(next_action_mask),
     ))
+    self.trained_steps += 1
 
   def train_step(self) -> float | None:
     if self.model is None:
@@ -773,6 +775,7 @@ class BattleDQNAgent:
         "target_model_state_dict": self.target_model.state_dict(),
         "optimizer_state_dict": self.optimizer.state_dict(),
         "epsilon": self.epsilon,
+        "trained_steps": self.trained_steps,
         "learn_steps": self.learn_steps,
         "state_size": self.state_size,
         "action_size": self.action_size,
@@ -788,4 +791,15 @@ class BattleDQNAgent:
     self.target_model.load_state_dict(checkpoint["target_model_state_dict"])
     self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     self.epsilon = checkpoint.get("epsilon", self.epsilon)
+    self.trained_steps = checkpoint.get(
+      "trained_steps",
+      checkpoint.get("trained_step", checkpoint.get("learn_steps", self.trained_steps)),
+    )
     self.learn_steps = checkpoint.get("learn_steps", self.learn_steps)
+    logger.info(
+      "Loaded DQN checkpoint from %s: trained_steps=%d learn_steps=%d epsilon=%.4f",
+      path,
+      self.trained_steps,
+      self.learn_steps,
+      self.epsilon,
+    )

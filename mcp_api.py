@@ -42,7 +42,7 @@ class STS2Client:
         self,
         base_url: str = "http://localhost:15526/api/v1",
         mode: GameMode = "singleplayer",
-        timeout: float = 5.0,
+        timeout: float = 10.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.mode = mode
@@ -74,7 +74,10 @@ class STS2Client:
                 timeout=self.timeout,
             )
         except requests.RequestException as exc:
-            raise STS2ClientError(f"Request failed: {exc}") from exc
+            raise STS2ClientError(
+                f"Request failed: method={method} endpoint={endpoint} "
+                f"params={params} body={json_body} error={exc}"
+            ) from exc
 
         try:
             data = response.json()

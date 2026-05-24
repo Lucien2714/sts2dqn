@@ -1,4 +1,5 @@
 import typing as t
+import logging
 import numpy as np
 import random
 
@@ -10,6 +11,8 @@ BATTLE_STATE_TYPES = COMBAT_STATE_TYPES | {"hand_select"}
 BATTLE_REWARD_STATE_TYPES = {"rewards", "card_reward"}
 BATTLE_GOLD_LOSS_PENALTY = 0.1
 BATTLE_MAX_HP_LOSS_PENALTY = 5.0
+
+logger = logging.getLogger(__name__)
 
 
 class Game:
@@ -23,6 +26,7 @@ class Game:
         character: int=0,
         seed: t.Optional[int] = None,
         base_url: str = "http://localhost:15526/api/v1",
+        timeout: float = 20.0,
     ):
         self.character = character
         random.seed(seed)
@@ -36,6 +40,7 @@ class Game:
         self.client = STS2Client(
             base_url=base_url,
             mode="singleplayer",
+            timeout=timeout,
         )
 
 
@@ -61,49 +66,43 @@ class Game:
         raw_state = self.client.get_state()
 
         if raw_state.get("state_type") == "game_over":
-            self.client.menu_select("main_menu")
-            raw_state = self.client.get_state()
+            raw_state = self._menu_select_state("main_menu")
 
         if raw_state.get("state_type") == "menu":
             menu_screen = raw_state.get("menu_screen")
 
             if menu_screen == "main":
                 if "abandon_run" in raw_state.get("options", []):
-                    self.client.menu_select("abandon_run")
-                    self.client.menu_select("yes")
-                self.client.menu_select("singleplayer")
-                raw_state = self.client.get_state()
+                    raw_state = self._menu_select_state("abandon_run")
+                    raw_state = self._menu_select_state("yes")
+                raw_state = self._menu_select_state("singleplayer")
 
             if raw_state.get("state_type") == "menu" and raw_state.get("menu_screen") == "singleplayer":
-                self.client.menu_select("standard")
-                raw_state = self.client.get_state()
+                raw_state = self._menu_select_state("standard")
                 
             if raw_state.get("state_type") == "menu" and raw_state.get("menu_screen") == "character_select":
-                self.client.menu_select(GameCharacter.get(self.character, 0))
-                self.client.menu_select("confirm")
-                raw_state = self.client.get_state()
+                raw_state = self._menu_select_state(GameCharacter.get(self.character, 0))
+                logger.info(f"Selected character: {GameCharacter.get(self.character, 0)}")
+                raw_state = self._menu_select_state("confirm")
         self.player=Player(self.character)
         self._last_player_hp = self._player_hp(raw_state, self._last_player_hp)
         self._battle_start_hp = None
         self._battle_start_gold = None
         self._battle_start_max_hp = None
         self._battle_reward_closed = False
-        self.act=self.client.get_state().get("run", {}).get("act", 0)
-        self.floor=self.client.get_state().get("run", {}).get("floor", 0)
-        self.ascension=self.client.get_state().get("run", {}).get("ascension", 0)
+        self.act=raw_state.get("run", {}).get("act", 0)
+        self.floor=raw_state.get("run", {}).get("floor", 0)
+        self.ascension=raw_state.get("run", {}).get("ascension", 0)
         print(f"Started run: act={self.act}, floor={self.floor}, ascension={self.ascension}")
         self._state = self._encode_state(raw_state)
 
-        return 0
+        return raw_state
 
-    def step(self, action: dict):
-        prev_state = self.client.get_state()
-
+    def step(self, action: dict, prev_state: dict):
         try:
             api_result = self._apply_action(action, prev_state)
         except Exception as exc:
             raw_state = self.client.get_state()
-
             reward = 0.0
             done = raw_state.get("state_type") == "game_over"
             info = {
@@ -120,7 +119,7 @@ class Game:
 
             return 0, reward, done, info
 
-        raw_state = self.client.get_state()
+        raw_state = self._state_from_action_result(api_result)
 
         reward, reward_details = self._compute_reward(prev_state, raw_state, action)
         self._last_player_hp = self._player_hp(raw_state, self._last_player_hp)
@@ -134,6 +133,28 @@ class Game:
         }
 
         return 0, float(reward), bool(done), info
+
+    def _state_from_action_result(self, api_result):
+        if isinstance(api_result, dict):
+            if isinstance(api_result.get("state"), dict):
+                return api_result["state"]
+            if isinstance(api_result.get("raw_state"), dict):
+                return api_result["raw_state"]
+            if api_result.get("state_type") is not None:
+                return api_result
+
+        raise STS2ClientError(f"Action response did not include state: {api_result}")
+
+    def _menu_select_state(self, option: str):
+        logger.info("Reset menu_select option=%s", option)
+        raw_state = self._state_from_action_result(self.client.menu_select(option))
+        logger.info(
+            "Reset menu_select option=%s -> state_type=%s menu_screen=%s",
+            option,
+            raw_state.get("state_type"),
+            raw_state.get("menu_screen"),
+        )
+        return raw_state
 
     def _apply_action(self, action: dict, raw_state: dict):
         action_type = action.get("type")
