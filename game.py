@@ -203,6 +203,11 @@ class Game:
         if action_type == "skip_card_reward":
             return self.client.skip_card_reward()
 
+        if action_type == "claim_treasure_relic":
+            return self.client.claim_treasure_relic(
+                index=action["index"],
+            )
+
         if action_type == "choose_rest_option":
             return self.client.choose_rest_option(
                 index=action["index"],

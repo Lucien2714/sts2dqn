@@ -11,7 +11,38 @@ class RewardPolicy:
         if state_type == "card_reward":
             return self._choose_card_reward_action(state)
 
+        if state_type == "treasure":
+            return self._choose_treasure_action(state)
+
         return self._choose_rewards_action(state)
+
+    def _choose_treasure_action(self, state: dict) -> dict:
+        treasure = state.get("treasure", {})
+        relics = treasure.get("relics", [])
+        logger.debug(
+            "RewardPolicy: choosing treasure action relics=%d can_proceed=%s",
+            len(relics),
+            treasure.get("can_proceed"),
+        )
+
+        if relics:
+            relic = relics[0]
+            action = {
+                "type": "claim_treasure_relic",
+                "index": relic.get("index", 0),
+            }
+            logger.debug(
+                "RewardPolicy: selected treasure relic index=%s id=%s name=%s",
+                relic.get("index"),
+                relic.get("id"),
+                relic.get("name"),
+            )
+            logger.debug("RewardPolicy: selected action=%s", action)
+            return action
+
+        action = {"type": "proceed"}
+        logger.debug("RewardPolicy: selected treasure fallback action=%s", action)
+        return action
 
     def _choose_rewards_action(self, state: dict) -> dict:
         rewards = state.get("rewards", {})

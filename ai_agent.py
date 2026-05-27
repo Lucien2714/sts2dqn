@@ -53,7 +53,7 @@ class Agent:
             logger.debug("Agent: selected MapPolicy action=%s", action)
             return action
 
-        if screen_type in ["rewards", "card_reward"]:
+        if screen_type in ["rewards", "card_reward", "treasure"]:
             action = self.reward_policy.choose_action(raw_state)
             logger.debug("Agent: selected RewardPolicy action=%s", action)
             return action
