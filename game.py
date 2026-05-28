@@ -27,8 +27,12 @@ class Game:
         seed: t.Optional[int] = None,
         base_url: str = "http://localhost:15526/api/v1",
         timeout: float = 20.0,
+        game_mode: str = "standard",
+        run_seed: str | None = None,
     ):
         self.character = character
+        self.game_mode = game_mode
+        self.run_seed = run_seed
         random.seed(seed)
         self.player=Player(character)
         self._last_player_hp = None
@@ -54,15 +58,18 @@ class Game:
        '''
        pass
 
-    def reset(self):
+    def reset(self, run_seed: str | None = None):
         """
         Reset environment and start/create singleplayer mode.
 
         This tries to move from main menu into:
-            menu -> singleplayer -> standard
+            menu -> singleplayer -> game_mode
 
         Then it returns the current encoded observation.
         """
+        if run_seed is not None:
+            self.run_seed = run_seed
+
         raw_state = self.client.get_state()
 
         if raw_state.get("state_type") == "game_over":
@@ -78,12 +85,18 @@ class Game:
                 raw_state = self._menu_select_state("singleplayer")
 
             if raw_state.get("state_type") == "menu" and raw_state.get("menu_screen") == "singleplayer":
-                raw_state = self._menu_select_state("standard")
+                raw_state = self._menu_select_state(
+                    self.game_mode,
+                    seed=self.run_seed if self.game_mode in {"custom", "daily"} else None,
+                )
                 
             if raw_state.get("state_type") == "menu" and raw_state.get("menu_screen") == "character_select":
                 raw_state = self._menu_select_state(GameCharacter.get(self.character, 0))
                 logger.info(f"Selected character: {GameCharacter.get(self.character, 0)}")
-                raw_state = self._menu_select_state("confirm")
+                raw_state = self._menu_select_state(
+                    "confirm",
+                    seed=self.run_seed if self.game_mode in {"custom", "daily"} else None,
+                )
         self.player=Player(self.character)
         self._last_player_hp = self._player_hp(raw_state, self._last_player_hp)
         self._battle_start_hp = None
@@ -145,9 +158,11 @@ class Game:
 
         raise STS2ClientError(f"Action response did not include state: {api_result}")
 
-    def _menu_select_state(self, option: str):
-        logger.info("Reset menu_select option=%s", option)
-        raw_state = self._state_from_action_result(self.client.menu_select(option))
+    def _menu_select_state(self, option: str, seed: str | None = None):
+        logger.info("Reset menu_select option=%s seed=%s", option, seed)
+        raw_state = self._state_from_action_result(
+            self.client.menu_select(option, seed=seed)
+        )
         logger.info(
             "Reset menu_select option=%s -> state_type=%s menu_screen=%s",
             option,

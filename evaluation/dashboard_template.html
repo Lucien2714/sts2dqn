@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>STS2DQN Live Evaluation</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f4ef;
+      --panel: #ffffff;
+      --ink: #1f2933;
+      --muted: #5f6b7a;
+      --line: #d8dee6;
+      --blue: #3b82f6;
+      --green: #16a34a;
+      --red: #dc2626;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, Segoe UI, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    main { max-width: 1180px; margin: 0 auto; padding: 24px; }
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    h1 { margin: 0; font-size: 28px; line-height: 1.1; }
+    h2 { margin: 0 0 12px; font-size: 16px; }
+    .status { color: var(--muted); font-size: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: 0 1px 2px rgba(31, 41, 51, 0.06);
+    }
+    .span-4 { grid-column: span 4; }
+    .span-6 { grid-column: span 6; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: span 12; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .metric { border-left: 3px solid var(--blue); padding-left: 10px; min-width: 0; }
+    .metric strong { display: block; font-size: 20px; line-height: 1.2; overflow-wrap: anywhere; }
+    .metric span { color: var(--muted); font-size: 12px; text-transform: uppercase; }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #111827;
+      background: #f3f5f7;
+      border-radius: 6px;
+      padding: 12px;
+      max-height: 220px;
+      overflow: auto;
+    }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 9px 8px; border-bottom: 1px solid var(--line); text-align: right; }
+    th:first-child, td:first-child { text-align: left; }
+    th { color: var(--muted); font-weight: 600; }
+    .q-table { max-height: 320px; overflow: auto; margin-top: 12px; border: 1px solid var(--line); border-radius: 6px; }
+    .q-table table { font-size: 12px; }
+    .q-table th { position: sticky; top: 0; background: var(--panel); }
+    .q-table tr.selected { background: #eff6ff; }
+    svg { width: 100%; height: 220px; display: block; }
+    .empty { color: var(--muted); padding: 24px 0; text-align: center; }
+    .socket { color: var(--muted); font-size: 14px; }
+    .socket.connected { color: var(--green); }
+    .socket.disconnected { color: var(--red); }
+    @media (max-width: 860px) {
+      main { padding: 16px; }
+      header { display: block; }
+      .span-4, .span-6, .span-8 { grid-column: span 12; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>STS2DQN Live Evaluation</h1>
+        <div id="status" class="status">Connecting...</div>
+      </div>
+      <div id="socketStatus" class="socket disconnected">WebSocket disconnected</div>
+    </header>
+    <section class="grid">
+      <div id="current" class="panel span-8"></div>
+      <div id="best" class="panel span-4"></div>
+      <div id="rewardChart" class="panel span-6"></div>
+      <div id="floorChart" class="panel span-6"></div>
+      <div id="rows" class="panel span-12"></div>
+    </section>
+  </main>
+  <script>
+    const wsUrl = __WS_URL__;
+    const statusEl = document.getElementById("status");
+    const socketStatusEl = document.getElementById("socketStatus");
+    const currentEl = document.getElementById("current");
+    const bestEl = document.getElementById("best");
+    const rewardChartEl = document.getElementById("rewardChart");
+    const floorChartEl = document.getElementById("floorChart");
+    const rowsEl = document.getElementById("rows");
+    let reconnectTimer = null;
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function metric(label, value) {
+      return `<div class="metric"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`;
+    }
+
+    function fixed(value, digits = 2) {
+      const number = Number(value || 0);
+      return number.toFixed(digits);
+    }
+
+    function percent(value) {
+      return `${(Number(value || 0) * 100).toFixed(1)}%`;
+    }
+
+    function render(data) {
+      statusEl.innerHTML = `${escapeHtml(data.status)} &middot; elapsed ${escapeHtml(data.elapsed)}s &middot; ${escapeHtml(data.timestamp)}`;
+      renderCurrent(data.current_step || {});
+      renderBest(data.rows || []);
+      renderRows(data.rows || []);
+      renderChart(rewardChartEl, data.rows || [], "avg_reward", "Average reward", "#3b82f6");
+      renderChart(floorChartEl, data.rows || [], "avg_floor", "Average floor", "#16a34a");
+    }
+
+    function renderCurrent(current) {
+      if (!current.step) {
+        currentEl.innerHTML = '<h2>Current Episode</h2><div class="empty">Waiting for the first step...</div>';
+        return;
+      }
+      currentEl.innerHTML = `
+        <h2>Current Episode</h2>
+        <div class="metrics">
+          ${metric("Checkpoint", current.checkpoint)}
+          ${metric("Episode", current.episode)}
+          ${metric("Step", current.step)}
+          ${metric("Floor", current.floor)}
+          ${metric("Reward", fixed(current.episode_reward))}
+          ${metric("Battle reward", fixed(current.battle_reward))}
+          ${metric("Wins", current.battle_wins)}
+          ${metric("Losses", current.battle_losses)}
+        </div>
+        <p class="status">
+          seed=${escapeHtml(current.seed)} &middot;
+          ${escapeHtml(current.from_state)} &rarr; ${escapeHtml(current.to_state)} &middot;
+          last reward=${fixed(current.reward)}
+        </p>
+        <pre>${escapeHtml(JSON.stringify(current.action || {}, null, 2))}</pre>
+        ${renderQValues(current.q_values || {})}
+      `;
+    }
+
+    function renderQValues(qValues) {
+      if (!qValues.available) {
+        return `
+          <h2 style="margin-top: 16px;">Current Q Values</h2>
+          <div class="empty">${escapeHtml(qValues.reason || "Q values unavailable for this state.")}</div>
+        `;
+      }
+      const best = qValues.best_valid_action;
+      const bestText = best ? `${best.id}: ${best.key} (${fixed(best.q, 4)})` : "none";
+      const validActions = (qValues.actions || []).filter(action => action.valid);
+      const rows = validActions.map(action => `
+        <tr class="${action.selected ? "selected" : ""} ${action.valid ? "" : "invalid"}">
+          <td>${escapeHtml(action.id)}</td>
+          <td>${escapeHtml(action.key)}</td>
+          <td>${escapeHtml(action.valid ? "yes" : "no")}</td>
+          <td>${action.q === null ? "n/a" : fixed(action.q, 6)}</td>
+          <td>${action.masked_q === null ? "n/a" : fixed(action.masked_q, 6)}</td>
+          <td>${escapeHtml(action.selected ? "yes" : "")}</td>
+        </tr>
+      `).join("");
+      return `
+        <h2 style="margin-top: 16px;">Current Q Values</h2>
+        <p class="status">best valid=${escapeHtml(bestText)} &middot; valid actions=${escapeHtml(validActions.length)}</p>
+        <div class="q-table">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Action</th>
+                <th>Valid</th>
+                <th>Raw Q</th>
+                <th>Masked Q</th>
+                <th>Selected</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderBest(rows) {
+      if (!rows.length) {
+        bestEl.innerHTML = '<h2>Best Checkpoint</h2><div class="empty">No completed checkpoint yet.</div>';
+        return;
+      }
+      const best = rows.reduce((winner, row) => Number(row.avg_reward || 0) > Number(winner.avg_reward || 0) ? row : winner, rows[0]);
+      bestEl.innerHTML = `
+        <h2>Best Checkpoint</h2>
+        <div class="metrics">
+          ${metric("Checkpoint", best.checkpoint)}
+          ${metric("Avg reward", fixed(best.avg_reward))}
+          ${metric("Win rate", percent(best.battle_win_rate))}
+          ${metric("Max floor", best.max_floor)}
+        </div>
+      `;
+    }
+
+    function renderRows(rows) {
+      if (!rows.length) {
+        rowsEl.innerHTML = '<h2>Completed Checkpoints</h2><div class="empty">Results will appear after each checkpoint finishes.</div>';
+        return;
+      }
+      const body = rows.map(row => `
+        <tr>
+          <td>${escapeHtml(row.checkpoint)}</td>
+          <td>${escapeHtml(row.trained_steps)}</td>
+          <td>${fixed(row.avg_reward)}</td>
+          <td>${fixed(row.avg_battle_reward)}</td>
+          <td>${percent(row.battle_win_rate)}</td>
+          <td>${fixed(row.avg_floor, 1)}</td>
+          <td>${escapeHtml(row.max_floor)}</td>
+          <td>${escapeHtml(row.timeouts)}</td>
+        </tr>
+      `).join("");
+      rowsEl.innerHTML = `
+        <h2>Completed Checkpoints</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Checkpoint</th>
+              <th>Trained steps</th>
+              <th>Avg reward</th>
+              <th>Battle reward</th>
+              <th>Win rate</th>
+              <th>Avg floor</th>
+              <th>Max floor</th>
+              <th>Timeouts</th>
+            </tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      `;
+    }
+
+    function renderChart(container, rows, key, title, color) {
+      if (rows.length < 2) {
+        container.innerHTML = `<h2>${escapeHtml(title)}</h2><div class="empty">Chart starts after two checkpoints.</div>`;
+        return;
+      }
+      const values = rows.map(row => Number(row[key] || 0));
+      const width = 640;
+      const height = 220;
+      const padding = 28;
+      let minValue = Math.min(...values);
+      let maxValue = Math.max(...values);
+      if (minValue === maxValue) {
+        minValue -= 1;
+        maxValue += 1;
+      }
+      const points = values.map((value, index) => {
+        const x = padding + index * (width - padding * 2) / Math.max(1, values.length - 1);
+        const y = height - padding - (value - minValue) * (height - padding * 2) / (maxValue - minValue);
+        return [x, y];
+      });
+      const pointString = points.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+      const circles = points.map(([x, y]) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="${color}" />`).join("");
+      container.innerHTML = `
+        <h2>${escapeHtml(title)}</h2>
+        <svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(title)} chart">
+          <line x1="${padding}" y1="${height - padding}" x2="${width - padding}" y2="${height - padding}" stroke="#d8dee6" />
+          <line x1="${padding}" y1="${padding}" x2="${padding}" y2="${height - padding}" stroke="#d8dee6" />
+          <text x="${padding}" y="18" fill="#5f6b7a" font-size="12">${maxValue.toFixed(1)}</text>
+          <text x="${padding}" y="${height - 6}" fill="#5f6b7a" font-size="12">${minValue.toFixed(1)}</text>
+          <polyline points="${pointString}" fill="none" stroke="${color}" stroke-width="3" />
+          ${circles}
+        </svg>
+      `;
+    }
+
+    function connect() {
+      clearTimeout(reconnectTimer);
+      const socket = new WebSocket(wsUrl);
+      socket.addEventListener("open", () => {
+        socketStatusEl.textContent = `WebSocket connected: ${wsUrl}`;
+        socketStatusEl.className = "socket connected";
+      });
+      socket.addEventListener("message", event => render(JSON.parse(event.data)));
+      socket.addEventListener("close", () => {
+        socketStatusEl.textContent = "WebSocket disconnected; reconnecting...";
+        socketStatusEl.className = "socket disconnected";
+        reconnectTimer = setTimeout(connect, 1000);
+      });
+      socket.addEventListener("error", () => socket.close());
+    }
+
+    currentEl.innerHTML = '<h2>Current Episode</h2><div class="empty">Connecting to evaluator...</div>';
+    bestEl.innerHTML = '<h2>Best Checkpoint</h2><div class="empty">Connecting to evaluator...</div>';
+    rewardChartEl.innerHTML = '<h2>Average reward</h2><div class="empty">Connecting to evaluator...</div>';
+    floorChartEl.innerHTML = '<h2>Average floor</h2><div class="empty">Connecting to evaluator...</div>';
+    rowsEl.innerHTML = '<h2>Completed Checkpoints</h2><div class="empty">Connecting to evaluator...</div>';
+    connect();
+  </script>
+</body>
+</html>
